@@ -1,0 +1,29 @@
+# Copy this to .github/workflows/clurichaun.yml in your repo to enable it.
+name: clurichaun secret scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history so --git-history can see it
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - name: Scan the working tree and git history
+        run: >
+          clurichaun scan . --git-history
+          --fail-on high
+          -f sarif -o clurichaun.sarif
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: clurichaun.sarif

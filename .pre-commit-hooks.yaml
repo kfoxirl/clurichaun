@@ -1,0 +1,7 @@
+- id: clurichaun
+  name: clurichaun (staged secret scan)
+  description: Scan git-staged content for secrets before commit.
+  entry: clurichaun scan --staged --fail-on high
+  language: python
+  pass_filenames: false
+  require_serial: true
