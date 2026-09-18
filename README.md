@@ -4,14 +4,65 @@ Universal secret, credential, endpoint and configuration-leakage scanner. Reads
 *anything* — plaintext, minified bundles, source maps, binaries, archives,
 structured config — and reports in table, JSON or SARIF.
 
-```
-pip install -e .            # core (click, PyYAML, rich) — local scanning
-pip install -e '.[web]'     # + requests, beautifulsoup4 — enables scan-web
-pip install -e '.[full]'    # + python-magic, py7zr, rarfile
+## Installation
+
+Requires **Python ≥ 3.11**. The core has three small pure-Python dependencies
+(`click`, `PyYAML`, `rich`); everything else is an opt-in extra.
+
+```bash
+# From GitHub (latest release)
+pip install "git+https://github.com/kfoxirl/clurichaun.git@v0.1.0"
+
+# ...or the current main
+pip install "git+https://github.com/kfoxirl/clurichaun.git"
+
+# ...or from a local clone
+git clone https://github.com/kfoxirl/clurichaun.git
+cd clurichaun
+pip install .            # or `pip install -e .` for a development install
 ```
 
-The local scanner never imports a network library: `scan-web` loads its
-dependencies lazily and tells you which extra to install if they are missing.
+This installs the `clurichaun` command. Verify:
+
+```bash
+clurichaun --version
+clurichaun scan --help
+```
+
+### Optional extras
+
+The local scanner never imports a network or cloud library — each feature loads
+its dependencies lazily and tells you which extra to install if they are
+missing. Install only what you need:
+
+| Extra | Enables | Pulls in |
+|---|---|---|
+| `web` | `scan-web`, `scan-github`, `--verify` | `requests`, `beautifulsoup4` |
+| `cloud` | `scan-bucket` (S3 / GCS) | `boto3`, `google-cloud-storage` |
+| `ml` | `--token-efficiency` rescoring | `tiktoken` |
+| `full` | better type sniffing + 7z/rar archives + `web` | `python-magic`, `py7zr`, `rarfile`, `requests`, `beautifulsoup4` |
+| `dev` | test/lint toolchain | `pytest`, `mypy`, `ruff` |
+
+```bash
+pip install "clurichaun[web] @ git+https://github.com/kfoxirl/clurichaun.git"
+pip install ".[full]"          # from a clone
+pip install ".[web,cloud,ml]"  # combine extras
+```
+
+> `python-magic` (in `full`) needs the system `libmagic` library
+> (`apt install libmagic1`, `brew install libmagic`). It is optional — without
+> it, Clurichaun falls back to pure-Python magic-byte sniffing.
+
+### Pre-commit hook
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/kfoxirl/clurichaun
+    rev: v0.1.0
+    hooks:
+      - id: clurichaun
+```
 
 ## Usage
 
