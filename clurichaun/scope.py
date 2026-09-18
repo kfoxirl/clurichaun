@@ -179,6 +179,21 @@ DENY_DIRS: frozenset[str] = frozenset(
     }
 )
 
+# Dependency-cache trees identified by a path fragment rather than a bare name.
+# Everything under these is downloaded third-party code (and its test fixtures),
+# the single biggest source of noise when scanning a home directory.
+DENY_PATH_FRAGMENTS: Tuple[str, ...] = (
+    "/go/pkg/mod",          # Go module cache
+    "/.cargo/registry",     # Rust crates
+    "/.rustup/toolchains",  # Rust toolchains
+    "/.gradle/caches",      # Gradle
+    "/.m2/repository",      # Maven
+    "/.nuget/packages",     # NuGet
+    "/.pub-cache",          # Dart/Flutter
+    "/.cache/go-build",     # Go build cache
+    "/site-packages/",      # Python (also a DENY_DIRS name, belt-and-braces)
+)
+
 # Keep .git and friends: their metadata is in scope. They are explicitly
 # excluded from DENY_DIRS above and handled by the vcs category.
 
@@ -206,10 +221,17 @@ class ScopeFilter:
     exclude_globs: Sequence[str] = field(default_factory=tuple)
     follow_deny_dirs: bool = False
 
-    def skip_dir(self, name: str) -> bool:
+    def skip_dir(self, name: str, path: str = "") -> bool:
         if self.follow_deny_dirs:
             return False
-        return name in DENY_DIRS
+        if name in DENY_DIRS:
+            return True
+        # Dependency caches whose distinctive marker is a *path* fragment, not a
+        # single directory name (e.g. `go/pkg/mod` — `pkg` and `mod` are far too
+        # common to deny on their own). These trees are downloaded third-party
+        # code full of other projects' test fixtures and example keys.
+        norm = path.replace("\\", "/")
+        return any(fragment in norm for fragment in DENY_PATH_FRAGMENTS)
 
     def allow(self, path: str) -> bool:
         """Decide whether a filesystem path should be opened at all."""

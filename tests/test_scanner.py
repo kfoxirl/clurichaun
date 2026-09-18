@@ -1748,3 +1748,24 @@ def test_revoke_aws_reports_access_denied() -> None:
     ok, detail = revoke_aws(f"{AWS_KEY}:{AWS_SECRET}", sess)
     assert not ok and "AccessDenied" in detail
     assert "iam.amazonaws.com" in sess.calls[0]
+
+
+# --------------------------------------------------------------------------- #
+# Dependency-cache pruning (Go module cache etc.) by path fragment
+# --------------------------------------------------------------------------- #
+
+
+def test_skip_dependency_caches_by_path() -> None:
+    from clurichaun.scope import ScopeFilter
+
+    sf = ScopeFilter()
+    # Dependency caches are pruned by path fragment...
+    assert sf.skip_dir("mod", "/home/u/go/pkg/mod")
+    assert sf.skip_dir("registry", "/home/u/.cargo/registry")
+    assert sf.skip_dir("repository", "/home/u/.m2/repository")
+    # ...but a real Go project's pkg/ or mod/ is NOT pruned.
+    assert not sf.skip_dir("pkg", "/home/u/myproject/pkg")
+    assert not sf.skip_dir("mod", "/home/u/myproject/mod")
+    assert not sf.skip_dir("src", "/home/u/myproject/src")
+    # --all-dirs disables all pruning.
+    assert not ScopeFilter(follow_deny_dirs=True).skip_dir("mod", "/home/u/go/pkg/mod")

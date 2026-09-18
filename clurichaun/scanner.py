@@ -216,7 +216,7 @@ class ScannerEngine:
                 try:
                     if entry.is_dir(follow_symlinks=self.config.limits.follow_symlinks):
                         name = paths.safe_name(entry.path)
-                        if self.config.scope.skip_dir(name):
+                        if self.config.scope.skip_dir(name, entry.path):
                             continue
                         if not self.config.include_hidden and name.startswith("."):
                             continue
