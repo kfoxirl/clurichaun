@@ -1,14 +1,14 @@
 """SQLite datastore for incremental scans, content dedup and finding history.
 
 Re-scanning an unchanged tree from scratch every night is the difference between
-a 20-minute job and a 20-second one. This store, keyed on ``(path, mtime,
-size)``, lets the walker skip files that have not moved since the last scan, and
-records every finding so a report can show what is *new* versus long-known.
+a 20-minute job and a 20-second one. This store records a **content hash** per file so an incremental scan can skip
+files whose bytes are unchanged since the last run, and records every finding so
+a report can show what is *new* versus long-known.
 
 Three roles, all optional and all opt-in via ``--db``:
 
-* **Incremental skip** — ``unchanged(path, mtime, size)`` answers whether a file
-  needs re-scanning.
+* **Incremental skip** — ``known_hashes()`` returns the last scan's content
+  hashes; a worker skips a file whose hash is unchanged.
 * **Content dedup** — a blob hash seen this run is not scanned again (Nosey
   Parker's trick), across the filesystem and git history alike.
 * **Finding history** — ``first_seen`` / ``last_seen`` per fingerprint, plus a
@@ -27,7 +27,7 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional
 
 from .models import Finding, Verified
 
@@ -91,6 +91,17 @@ class Store:
             "SELECT mtime, size FROM files WHERE path = ?", (path,)
         ).fetchone()
         return row is not None and row[0] == mtime and row[1] == size
+
+    def known_hashes(self) -> Dict[str, str]:
+        """{path: content-hash} for every file recorded with a hash.
+
+        Loaded once at the start of an incremental scan so workers can decide,
+        by content, whether a file is unchanged since the last run.
+        """
+        rows = self._conn.execute(
+            "SELECT path, blob_hash FROM files WHERE blob_hash IS NOT NULL"
+        ).fetchall()
+        return {path: h for path, h in rows}
 
     def record_file(
         self, path: str, mtime: float, size: int, blob_hash: Optional[str] = None

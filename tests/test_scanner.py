@@ -1807,3 +1807,45 @@ def test_scan_no_save_flags(tmp_path: Path, monkeypatch) -> None:
     CliRunner().invoke(main, ["scan", str(target), "-q", "--no-db", "--no-report"])
     assert not (home / "history.db").exists()
     assert not (home / "reports").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Content-hash incremental: skip by hash, not mtime/size
+# --------------------------------------------------------------------------- #
+
+
+def test_incremental_is_content_hash_based(tmp_path: Path) -> None:
+    import os
+
+    db = str(tmp_path / "db.sqlite")           # kept OUTSIDE the scanned tree
+    target = tmp_path / "proj"
+    target.mkdir()
+    f = target / "a.env"
+    f.write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+
+    def run():  # type: ignore[no-untyped-def]
+        eng = ScannerEngine(
+            ScanConfig(roots=[str(target)], workers=1, db_path=db, incremental=True)
+        )
+        found = eng.run()
+        return eng.stats.files_scanned, eng.stats.files_skipped, found
+
+    scanned1, skipped1, found1 = run()
+    assert scanned1 == 1 and any(f.rule_id == "aws.access-key-id" for f in found1)
+
+    # Second run, nothing changed -> skipped by hash.
+    scanned2, skipped2, _ = run()
+    assert scanned2 == 0 and skipped2 == 1
+
+    # Bump mtime but keep content identical -> STILL skipped (mtime-based would rescan).
+    os.utime(f, (0, 0))
+    scanned3, skipped3, _ = run()
+    assert scanned3 == 0 and skipped3 == 1, "mtime-only change must not trigger a rescan"
+
+    # Change content but keep the SAME byte length -> must be rescanned
+    # (this is the case a size/mtime check can miss).
+    new = f"AWS_ACCESS_KEY_ID={AWS_KEY[:-1]}X\n"
+    assert len(new) == len(f.read_text())
+    f.write_text(new, encoding="utf-8")
+    scanned4, skipped4, _ = run()
+    assert scanned4 == 1, "a same-size content change must be rescanned"

@@ -231,6 +231,10 @@ class FileResult:
     path: str
     findings: List[Finding] = field(default_factory=list)
     stats: ScanStats = field(default_factory=ScanStats)
+    blob_hash: Optional[str] = None   # content hash, for incremental scanning
+    mtime: float = 0.0
+    size: int = 0
+    unchanged: bool = False           # hash matched the previous scan -> skipped
 
 
 def dedupe(findings: Iterable[Finding]) -> List[Finding]:

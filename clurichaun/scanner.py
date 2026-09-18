@@ -56,11 +56,33 @@ class ScanConfig:
 _WORKER: dict[str, object] = {}
 
 
-def _init_worker(config: ScanConfig) -> None:
+def _init_worker(config: ScanConfig, prior_hashes: Optional[dict] = None) -> None:
     _WORKER["detector"] = SecretDetector(config.detector)
     _WORKER["ingestor"] = FileIngestor(config.limits, allow=config.scope.allow)
     _WORKER["root"] = config.roots[0] if len(config.roots) == 1 else ""
     _WORKER["timeout"] = config.file_timeout if _can_alarm() else 0.0
+    _WORKER["incremental"] = config.incremental
+    _WORKER["prior_hashes"] = prior_hashes or {}
+    _WORKER["max_file_size"] = config.limits.max_file_size
+
+
+def hash_file(path: str, limit: int) -> Optional[str]:
+    """Content hash of a file (streaming, bounded memory). None on error."""
+    import hashlib
+
+    digest = hashlib.blake2b(digest_size=16)
+    read = 0
+    try:
+        with open(path, "rb") as handle:
+            while read < limit:
+                chunk = handle.read(1 << 20)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                read += len(chunk)
+    except (OSError, ValueError):
+        return None
+    return digest.hexdigest()
 
 
 class _Budget(Exception):
@@ -94,6 +116,28 @@ def _scan_one(path: str) -> FileResult:
     assert isinstance(ingestor, FileIngestor)
 
     stats = ScanStats(files_seen=1)
+
+    # Incremental: hash the file and skip it if the content is byte-identical to
+    # the last scan. Content-based, so a change that preserved mtime/size (a
+    # newly planted secret via `cp -p`, a `git checkout`) is still caught.
+    blob_hash: Optional[str] = None
+    mtime = size = 0.0
+    if _WORKER.get("incremental"):
+        limit = int(_WORKER.get("max_file_size") or (1 << 40))
+        blob_hash = hash_file(path, limit)
+        try:
+            info = os.stat(path, follow_symlinks=False)
+            mtime, size = info.st_mtime, info.st_size
+        except (OSError, ValueError):
+            pass
+        prior = _WORKER.get("prior_hashes") or {}
+        if blob_hash is not None and prior.get(path) == blob_hash:
+            stats.files_skipped = 1
+            return FileResult(
+                path=path, stats=stats, blob_hash=blob_hash,
+                mtime=mtime, size=int(size), unchanged=True,
+            )
+
     findings: List[Finding] = []
     budget = float(_WORKER.get("timeout") or 0.0)
     armed = _arm(budget)
@@ -112,7 +156,10 @@ def _scan_one(path: str) -> FileResult:
         if armed:
             signal.setitimer(signal.ITIMER_REAL, 0)
 
-    return FileResult(path=path, findings=findings, stats=stats)
+    return FileResult(
+        path=path, findings=findings, stats=stats,
+        blob_hash=blob_hash, mtime=mtime, size=int(size),
+    )
 
 
 def _scan_batch(batch: List[str]) -> List[FileResult]:
@@ -172,7 +219,8 @@ class ScannerEngine:
         # The store lives only in the main process (it walks and records); it is
         # never sent to workers, which just scan bytes.
         self.store = None
-        self._scanned_files: List[Tuple[str, float, int]] = []
+        self._file_records: List[Tuple[str, float, int, Optional[str]]] = []
+        self._prior_hashes: dict = {}
         if config.db_path:
             from .store import open_store
 
@@ -237,17 +285,6 @@ class ScannerEngine:
                     if not self.config.scope.allow(paths.display(entry.path)):
                         self.stats.files_skipped += 1
                         continue
-                    if self.config.incremental and self.store is not None:
-                        try:
-                            info = entry.stat(follow_symlinks=False)
-                            if self.store.unchanged(entry.path, info.st_mtime, info.st_size):
-                                self.stats.files_skipped += 1
-                                continue
-                            self._scanned_files.append(
-                                (entry.path, info.st_mtime, info.st_size)
-                            )
-                        except (OSError, ValueError):
-                            pass
                     yield entry.path
                 except (OSError, ValueError) as exc:
                     self.stats.errors.append(f"{entry.path}: {exc}")
@@ -273,12 +310,19 @@ class ScannerEngine:
                 self._persist(findings)
             return findings
 
+        # Incremental: load the previous scan's content hashes so workers can
+        # skip files whose bytes are unchanged.
+        if self.config.incremental and self.store is not None:
+            try:
+                self._prior_hashes = self.store.known_hashes()
+            except Exception as exc:  # noqa: BLE001
+                self.stats.errors.append(f"datastore: could not load hashes: {exc}")
+
         if worker_count == 1:
-            _init_worker(self.config)
+            _init_worker(self.config, self._prior_hashes)
             for index, path in enumerate(self.walk(), start=1):
                 result = _scan_one(path)
-                findings.extend(result.findings)
-                self.stats.merge(result.stats)
+                self._absorb(result, findings)
                 if progress:
                     progress(path, index)
         else:
@@ -291,11 +335,20 @@ class ScannerEngine:
             self._persist(findings)
         return findings
 
+    def _absorb(self, result, findings: List[Finding]) -> None:  # type: ignore[no-untyped-def]
+        """Fold one FileResult into the running totals and record its hash."""
+        findings.extend(result.findings)
+        self.stats.merge(result.stats)
+        if result.blob_hash is not None:
+            self._file_records.append(
+                (result.path, result.mtime, result.size, result.blob_hash)
+            )
+
     def _persist(self, findings: List[Finding]) -> None:
         assert self.store is not None
         try:
-            for path, mtime, size in self._scanned_files:
-                self.store.record_file(path, mtime, size)
+            for path, mtime, size, blob_hash in self._file_records:
+                self.store.record_file(path, mtime, size, blob_hash)
             counts = self.store.record_findings(findings)
             self.store.commit()
             self.stats.errors.append(
@@ -332,8 +385,7 @@ class ScannerEngine:
                             continue
                         for result in results:
                             done += 1
-                            findings.extend(result.findings)
-                            self.stats.merge(result.stats)
+                            self._absorb(result, findings)
                             if progress:
                                 progress(result.path, done)
                     for batch in islice(batches, len(finished)):
@@ -348,12 +400,11 @@ class ScannerEngine:
     def _run_serial_fallback(
         self, progress: Optional[ProgressHook], done: int
     ) -> List[Finding]:
-        _init_worker(self.config)
+        _init_worker(self.config, self._prior_hashes)
         findings: List[Finding] = []
         for path in self.walk():
             result = _scan_one(path)
-            findings.extend(result.findings)
-            self.stats.merge(result.stats)
+            self._absorb(result, findings)
             done += 1
             if progress:
                 progress(path, done)
@@ -454,14 +505,14 @@ class ScannerEngine:
 
     def _make_executor(self, worker_count: int) -> Executor:
         if self.config.use_threads:
-            _init_worker(self.config)  # threads share the parent's globals
+            _init_worker(self.config, self._prior_hashes)  # threads share globals
             return ThreadPoolExecutor(max_workers=worker_count)
         try:
             return ProcessPoolExecutor(
                 max_workers=worker_count,
                 initializer=_init_worker,
-                initargs=(self.config,),
+                initargs=(self.config, self._prior_hashes),
             )
         except (OSError, ValueError, NotImplementedError):  # pragma: no cover
-            _init_worker(self.config)
+            _init_worker(self.config, self._prior_hashes)
             return ThreadPoolExecutor(max_workers=worker_count)

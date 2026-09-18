@@ -175,7 +175,7 @@ def main(ctx: click.Context) -> None:
 @click.option("--db", "db_path", type=click.Path(dir_okay=False), help="SQLite datastore for finding history (default: ~/.clurichaun/history.db).")
 @click.option("--no-db", is_flag=True, help="Do not record findings to the history datastore.")
 @click.option("--no-report", is_flag=True, help="Do not auto-save a JSON report (results are saved by default).")
-@click.option("--incremental", is_flag=True, help="With the datastore, skip files unchanged since the last scan.")
+@click.option("--incremental", is_flag=True, help="Skip files whose CONTENT HASH is unchanged since the last scan (needs the datastore).")
 @click.option("--token-efficiency", is_flag=True, help="Rescore fuzzy findings by BPE token efficiency (needs the [ml] extra).")
 @click.option("--only-actionable", is_flag=True, help="Report only findings worth acting on now (verified-active, checksum-valid, or high-confidence).")
 @click.option("--new-only", is_flag=True, help="With --db, report only findings not seen in a prior scan.")
