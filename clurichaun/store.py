@@ -27,7 +27,7 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .models import Finding, Verified
 
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS findings (
     fingerprint TEXT PRIMARY KEY,
     rule_id TEXT NOT NULL,
     logical_path TEXT NOT NULL,
+    source_path TEXT,
     line INTEGER NOT NULL,
     severity TEXT NOT NULL,
     verified TEXT NOT NULL,
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS findings (
     last_seen REAL NOT NULL,
     data TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source_path);
 CREATE TABLE IF NOT EXISTS blobs (blob_hash TEXT PRIMARY KEY, seen_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS verifications (
     secret_hash TEXT PRIMARY KEY,
@@ -74,12 +76,19 @@ class Store:
         self.path = str(path)
         self._conn = sqlite3.connect(self.path)
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.execute(
             "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', ?)",
             (SCHEMA_VERSION,),
         )
         self._conn.commit()
         self._blob_cache: set[str] = set()
+
+    def _migrate(self) -> None:
+        """Add columns that older databases predate. Idempotent."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(findings)")}
+        if "source_path" not in cols:
+            self._conn.execute("ALTER TABLE findings ADD COLUMN source_path TEXT")
 
     # ------------------------------------------------------------------ #
     # Incremental skip
@@ -153,12 +162,13 @@ class Store:
                 finding.notes.append("new since last scan")
             self._conn.execute(
                 "INSERT OR REPLACE INTO findings(fingerprint, rule_id, logical_path, "
-                "line, severity, verified, first_seen, last_seen, data) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "source_path, line, severity, verified, first_seen, last_seen, data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     fp,
                     finding.rule_id,
                     finding.logical_path,
+                    finding.source_path,
                     finding.line,
                     finding.severity.value,
                     finding.verified.value,
@@ -168,6 +178,24 @@ class Store:
                 ),
             )
         return counts
+
+    def findings_for_paths(self, paths: Iterable[str]) -> List[Finding]:
+        """Reconstruct the stored findings for a set of source file paths.
+
+        Used to carry findings forward for files that were unchanged since the
+        last scan, so an incremental scan's report is still complete.
+        """
+        out: List[Finding] = []
+        cursor = self._conn.cursor()
+        for path in paths:
+            for (blob,) in cursor.execute(
+                "SELECT data FROM findings WHERE source_path = ?", (path,)
+            ):
+                try:
+                    out.append(Finding.from_stored(json.loads(blob)))
+                except (ValueError, KeyError, TypeError):
+                    continue
+        return out
 
     # ------------------------------------------------------------------ #
     # Verification cache

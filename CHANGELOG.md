@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 — 2026-09-18
+
+- **Incremental by default, results stay complete.** A repeat scan skips
+  re-reading files whose content hash is unchanged, but carries their findings
+  forward from the datastore — so a default `scan` is fast on repeat runs *and*
+  always reports every secret present, not just the ones in changed files.
+  `--full` forces a complete re-scan. Content-hash based, so a change that
+  preserved mtime/size is still caught.
+- **Live results table.** On a terminal, findings stream into a live-updating
+  table with a running severity tally as they are found, instead of appearing
+  only at the end.
+
 ## v0.2.0 — 2026-09-18
 
 - **Results are saved by default.** Every `scan` now writes a timestamped JSON

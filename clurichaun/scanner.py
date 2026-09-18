@@ -221,6 +221,9 @@ class ScannerEngine:
         self.store = None
         self._file_records: List[Tuple[str, float, int, Optional[str]]] = []
         self._prior_hashes: dict = {}
+        self._skipped_paths: List[str] = []
+        self.carried_forward = 0  # findings reloaded for unchanged files
+        self._on_result: Optional[Callable[[FileResult], None]] = None
         if config.db_path:
             from .store import open_store
 
@@ -298,10 +301,20 @@ class ScannerEngine:
 
     # ------------------------------------------------------------------ #
 
-    def run(self, progress: Optional[ProgressHook] = None) -> List[Finding]:
-        """Walk and scan concurrently, keeping a bounded window in flight."""
+    def run(
+        self,
+        progress: Optional[ProgressHook] = None,
+        on_result: Optional[Callable[[FileResult], None]] = None,
+    ) -> List[Finding]:
+        """Walk and scan concurrently, keeping a bounded window in flight.
+
+        ``on_result`` is called (in the main process) with each FileResult that
+        produced findings, as it completes — so a caller can stream results to a
+        live display instead of waiting for the whole scan.
+        """
         findings: List[Finding] = []
         worker_count = self.config.worker_count
+        self._on_result = on_result
 
         if self.config.staged:
             # Pre-commit mode: scan the index, nothing else.
@@ -331,6 +344,18 @@ class ScannerEngine:
         if self.config.git_history:
             findings.extend(self.scan_git_history(progress))
 
+        # Option B: an unchanged file was skipped (no re-scan), but its findings
+        # must still appear so the report stays complete. Carry them forward from
+        # the datastore.
+        if self.config.incremental and self.store is not None and self._skipped_paths:
+            try:
+                carried = self.store.findings_for_paths(self._skipped_paths)
+            except Exception as exc:  # noqa: BLE001
+                self.stats.errors.append(f"datastore: carry-forward failed: {exc}")
+                carried = []
+            self.carried_forward = len(carried)
+            findings.extend(carried)
+
         if self.store is not None:
             self._persist(findings)
         return findings
@@ -343,6 +368,10 @@ class ScannerEngine:
             self._file_records.append(
                 (result.path, result.mtime, result.size, result.blob_hash)
             )
+        if result.unchanged:
+            self._skipped_paths.append(result.path)
+        if self._on_result is not None and result.findings:
+            self._on_result(result)
 
     def _persist(self, findings: List[Finding]) -> None:
         assert self.store is not None

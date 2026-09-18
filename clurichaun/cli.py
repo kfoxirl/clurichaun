@@ -175,7 +175,7 @@ def main(ctx: click.Context) -> None:
 @click.option("--db", "db_path", type=click.Path(dir_okay=False), help="SQLite datastore for finding history (default: ~/.clurichaun/history.db).")
 @click.option("--no-db", is_flag=True, help="Do not record findings to the history datastore.")
 @click.option("--no-report", is_flag=True, help="Do not auto-save a JSON report (results are saved by default).")
-@click.option("--incremental", is_flag=True, help="Skip files whose CONTENT HASH is unchanged since the last scan (needs the datastore).")
+@click.option("--incremental/--full", "incremental", default=True, help="Reuse the datastore: skip re-scanning files whose content hash is unchanged (carrying their findings forward). --full forces a complete re-scan. [default: incremental]")
 @click.option("--token-efficiency", is_flag=True, help="Rescore fuzzy findings by BPE token efficiency (needs the [ml] extra).")
 @click.option("--only-actionable", is_flag=True, help="Report only findings worth acting on now (verified-active, checksum-valid, or high-confidence).")
 @click.option("--new-only", is_flag=True, help="With --db, report only findings not seen in a prior scan.")
@@ -280,17 +280,33 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
         git_since=git_since,
         staged=staged,
         db_path=db_path,
-        incremental=incremental,
+        incremental=incremental and db_path is not None,
         include_hidden=not no_hidden,
         max_files=max_files,
         file_timeout=file_timeout,
     )
 
     engine = ScannerEngine(config)
-    progress = None if quiet else _progress_hook()
-    findings = engine.run(progress=progress)
-    if progress is not None:
-        click.echo("", err=True)
+    live = (
+        output_format == "table"
+        and not output
+        and not quiet
+        and sys.stdout.isatty()
+        and report.Console is not None
+    )
+    if live:
+        findings = _run_live(engine, max_rows)
+    else:
+        progress = None if quiet else _progress_hook()
+        findings = engine.run(progress=progress)
+        if progress is not None:
+            click.echo("", err=True)
+
+    if engine.carried_forward and not quiet:
+        click.echo(
+            f"({engine.carried_forward} finding(s) carried forward from unchanged files)",
+            err=True,
+        )
 
     if verify:
         _run_verification(findings, verify_only, quiet, db_path)
@@ -401,6 +417,71 @@ def _run_verification(findings, verify_only, quiet, db_path=None) -> None:  # ty
         ) from exc
 
 
+def _run_live(engine, max_rows):  # type: ignore[no-untyped-def]
+    """Scan with a live-updating rolling table so findings appear as they arrive."""
+    from collections import Counter, deque
+
+    from rich.console import Group
+    from rich.live import Live
+    from rich.table import Table
+    from rich.text import Text
+
+    from .report import _SEVERITY_STYLE, short_path
+
+    window = max(10, max_rows or 30)
+    recent = deque(maxlen=window)
+    counts: Counter = Counter()
+    state = {"files": 0}
+
+    def render():  # type: ignore[no-untyped-def]
+        table = Table(header_style="bold", expand=True, show_lines=False)
+        table.add_column("Sev", width=8, no_wrap=True)
+        table.add_column("Rule", width=26, no_wrap=True)
+        table.add_column("Location", overflow="fold")
+        table.add_column("Secret", overflow="fold")
+        for finding in recent:
+            table.add_row(
+                Text(finding.severity.value.upper(), style=_SEVERITY_STYLE[finding.severity]),
+                finding.rule_id,
+                f"{short_path(finding.logical_path, None)}:{finding.line}",
+                finding.redacted(),
+            )
+        tally = "  ".join(
+            f"{s}={counts[s]}" for s in ("critical", "high", "medium", "low", "info") if counts[s]
+        ) or "no findings yet"
+        status = Text(
+            f"scanning… {state['files']} files · {sum(counts.values())} findings   {tally}",
+            style="bold cyan",
+        )
+        return Group(status, table)
+
+    import time
+
+    live = Live(render(), auto_refresh=False, transient=True)
+    last = [0.0]
+
+    def refresh(force: bool = False) -> None:
+        now = time.monotonic()
+        if force or now - last[0] > 0.1:  # cap redraws at ~10/s
+            last[0] = now
+            live.update(render(), refresh=True)
+
+    def on_result(result):  # type: ignore[no-untyped-def]
+        for finding in result.findings:
+            recent.append(finding)
+            counts[finding.severity.value] += 1
+        refresh()
+
+    def progress(_path, index):  # type: ignore[no-untyped-def]
+        state["files"] = index
+        refresh()
+
+    with live:
+        findings = engine.run(progress=progress, on_result=on_result)
+        refresh(force=True)
+    return findings
+
+
 def _clurichaun_home():  # type: ignore[no-untyped-def]
     """The ~/.clurichaun state directory (override with CLURICHAUN_HOME)."""
     import os
@@ -423,7 +504,8 @@ def _autosave_report(findings, stats, roots, unredact, quiet):  # type: ignore[n
     reports = _clurichaun_home() / "reports"
     try:
         reports.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        # Microseconds so two scans in the same second don't overwrite.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         label = _safe_label(roots[0] if roots else "scan")
         path = reports / f"{stamp}_{label}.json"
         path.write_text(

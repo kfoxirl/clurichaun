@@ -1294,23 +1294,31 @@ def test_store_finding_history_new_vs_known(tmp_path: Path) -> None:
     assert second.known == len(findings2) and second.new == 0
 
 
-def test_incremental_scan_skips_second_run(tmp_path: Path) -> None:
-    (tmp_path / "a.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
-    db = str(tmp_path / "db.sqlite")
+def test_incremental_skips_work_but_carries_findings(tmp_path: Path) -> None:
+    # Option B: the second run does no scanning for an unchanged file, but its
+    # findings are carried forward so the report stays COMPLETE.
+    target = tmp_path / "proj"
+    target.mkdir()
+    (target / "a.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+    db = str(tmp_path / "db.sqlite")  # outside the scanned tree
 
     first = ScannerEngine(
-        ScanConfig(roots=[str(tmp_path)], workers=1, db_path=db, incremental=True)
+        ScanConfig(roots=[str(target)], workers=1, db_path=db, incremental=True)
     )
     found1 = first.run()
     assert any(f.rule_id == "aws.access-key-id" for f in found1)
 
     second = ScannerEngine(
-        ScanConfig(roots=[str(tmp_path)], workers=1, db_path=db, incremental=True)
+        ScanConfig(roots=[str(target)], workers=1, db_path=db, incremental=True)
     )
     found2 = second.run()
-    # Unchanged file is skipped; no filesystem findings the second time.
-    assert not [f for f in found2 if f.rule_id == "aws.access-key-id"]
+    assert second.stats.files_scanned == 0, "unchanged file is not re-scanned"
     assert second.stats.files_skipped >= 1
+    assert second.carried_forward >= 1
+    # ...yet the report is still complete — the AWS key is present, carried.
+    aws = [f for f in found2 if f.rule_id == "aws.access-key-id"]
+    assert aws and aws[0].carried
+    assert {f.fingerprint for f in found1} == {f.fingerprint for f in found2}
 
 
 def test_verification_cache_roundtrip(tmp_path: Path) -> None:
@@ -1849,3 +1857,27 @@ def test_incremental_is_content_hash_based(tmp_path: Path) -> None:
     f.write_text(new, encoding="utf-8")
     scanned4, skipped4, _ = run()
     assert scanned4 == 1, "a same-size content change must be rescanned"
+
+
+def test_cli_incremental_default_keeps_report_complete(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+    from clurichaun.cli import main
+
+    home = tmp_path / "state"
+    target = tmp_path / "proj"
+    target.mkdir()
+    (target / "a.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+    monkeypatch.setenv("CLURICHAUN_HOME", str(home))
+    runner = CliRunner()
+
+    # First scan (default: incremental on, empty DB -> scans everything).
+    runner.invoke(main, ["scan", str(target), "-q"])
+    # Second scan: unchanged file is not re-scanned, but the report must still
+    # contain the finding (carried forward).
+    runner.invoke(main, ["scan", str(target), "-q"])
+
+    reports = sorted((home / "reports").glob("*.json"))
+    assert len(reports) == 2
+    latest = json.loads(reports[-1].read_text())
+    ids = {f["rule_id"] for f in latest["findings"]}
+    assert "aws.access-key-id" in ids, "second incremental run's report stays complete"

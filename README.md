@@ -11,7 +11,7 @@ Requires **Python ≥ 3.11**. The core has three small pure-Python dependencies
 
 ```bash
 # From GitHub (latest release)
-pip install "git+https://github.com/kfoxirl/clurichaun.git@v0.2.0"
+pip install "git+https://github.com/kfoxirl/clurichaun.git@v0.3.0"
 
 # ...or the current main
 pip install "git+https://github.com/kfoxirl/clurichaun.git"
@@ -59,7 +59,7 @@ pip install ".[web,cloud,ml]"  # combine extras
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/kfoxirl/clurichaun
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
       - id: clurichaun
 ```
@@ -126,10 +126,31 @@ clurichaun scan . -o report.json        # your own report path/format instead
 clurichaun scan . --no-report           # do not auto-save a JSON snapshot
 clurichaun scan . --no-db               # do not record to the history datastore
 clurichaun scan . --db ./project.db     # a different datastore location
-clurichaun scan . --db ./project.db --incremental --new-only   # only what changed
 ```
 
 Set `CLURICHAUN_HOME` to relocate the whole state directory.
+
+### Incremental by default, without losing completeness
+
+A repeat scan of the same tree is fast: a file whose **content hash** is
+unchanged since the last scan is not re-read for detection. But the report stays
+**complete** — an unchanged file's findings are carried forward from the
+datastore, so `scan .` always shows every secret present, not just the ones in
+files that changed. Content-hash based, so a change that preserved a file's
+mtime/size (a `git checkout`, a `cp -p`) is still caught.
+
+```bash
+clurichaun scan .              # incremental + carry-forward (default)
+clurichaun scan . --full       # force a complete re-scan of everything
+clurichaun scan . --new-only   # report only findings new since the last scan
+```
+
+### Live results
+
+When printing to a terminal, findings stream into a live table as they are
+found, with a running severity tally — no waiting until the end. Piped or
+redirected output (`-o`, `-f json`, non-TTY) prints the final table/report as
+usual.
 
 Secrets are **redacted by default** (`AKIA...RTVW`) in every format, including
 match context — `--unredact` opts out. `--fail-on <severity>` gives CI a gate;

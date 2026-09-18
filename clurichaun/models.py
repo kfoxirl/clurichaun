@@ -118,6 +118,11 @@ class Finding:
     # Blast radius of a verified credential: identity + scopes it grants. Set by
     # the verifier on an ACTIVE verdict — "live" vs "live and can assume admin".
     access: Optional[Dict[str, Any]] = None
+    # When a finding is reconstructed from the datastore (carried forward from a
+    # prior scan of an unchanged file), its original fingerprint is preserved
+    # here — the stored `secret` is redacted, so the computed one would differ.
+    stored_fingerprint: Optional[str] = None
+    carried: bool = False  # loaded from the datastore, not scanned this run
 
     @property
     def identity_value(self) -> str:
@@ -156,11 +161,58 @@ class Finding:
         both the id and the secret, so rotating the secret under a reused id
         produces a distinct fingerprint — the rotation is not silently deduped.
         """
+        if self.stored_fingerprint:
+            return self.stored_fingerprint
         raw = f"{self.rule_id}\0{self.logical_path}\0{self.identity_value}"
         return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:32]
 
     def redacted(self) -> str:
         return redact(self.secret)
+
+    @classmethod
+    def from_stored(cls, data: Dict[str, Any]) -> "Finding":
+        """Rebuild a (display-only, already-redacted) finding from stored JSON.
+
+        Used to carry a finding forward from the datastore when its file was
+        unchanged since the last scan. The secret is already redacted, so the
+        original fingerprint is preserved via ``stored_fingerprint``.
+        """
+        git = None
+        if data.get("git"):
+            g = data["git"]
+            git = GitContext(
+                commit=g.get("commit", ""), author=g.get("author", ""),
+                email=g.get("email", ""), date=g.get("date", ""),
+                message=g.get("message", ""),
+            )
+        try:
+            verified = Verified(data.get("verified", "unknown"))
+        except ValueError:
+            verified = Verified.UNKNOWN
+        return cls(
+            rule_id=data.get("rule_id", ""),
+            title=data.get("title", ""),
+            detector=Detector(data.get("detector", "regex")),
+            severity=Severity(data.get("severity", "info")),
+            logical_path=data.get("logical_path", ""),
+            source_path=data.get("source_path", ""),
+            line=int(data.get("line", 0)),
+            column=int(data.get("column", 1)),
+            secret=data.get("secret", ""),
+            match_context=data.get("match_context", ""),
+            confidence=float(data.get("confidence", 0.5)),
+            entropy=data.get("entropy"),
+            key_name=data.get("key_name"),
+            notes=list(data.get("notes", [])),
+            media_type=data.get("media_type", "text/plain"),
+            secret_v2=data.get("secret_v2"),
+            verified=verified,
+            verification_note=data.get("verification_note"),
+            git=git,
+            access=data.get("access"),
+            stored_fingerprint=data.get("fingerprint"),
+            carried=True,
+        )
 
     def to_dict(self, unredact: bool = False) -> Dict[str, Any]:
         data = asdict(self)

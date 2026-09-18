@@ -12,7 +12,7 @@ from .models import Finding, ScanStats, Severity, Verified, redact, scrub
 from .patterns import RULES_BY_ID
 
 TOOL_NAME = "clurichaun"
-TOOL_VERSION = "0.2.0"
+TOOL_VERSION = "0.3.0"
 INFO_URI = "https://github.com/kfoxirl/clurichaun"
 
 try:  # pragma: no cover - optional dependency
