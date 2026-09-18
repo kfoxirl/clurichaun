@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.0 — 2026-09-18
+
+- **Results are saved by default.** Every `scan` now writes a timestamped JSON
+  snapshot to `~/.clurichaun/reports/` and records findings to a history
+  datastore at `~/.clurichaun/history.db`, so a long scan is never lost to the
+  terminal scrollback. The table still prints. Opt out with `--no-report` /
+  `--no-db`; relocate with `-o`, `--db`, or `CLURICHAUN_HOME`.
+- **Prune dependency caches.** Go module cache (`go/pkg/mod`), cargo/registry,
+  `.m2/repository`, gradle/nuget/pub caches and friends are skipped by path
+  fragment, so scanning `$HOME` no longer floods the report with other projects'
+  test fixtures and example keys.
+- **Precision 0.68 → 0.80 on CredData** (F1 0.67): endpoint/IP rules moved below
+  the default severity floor, tighter key-name value gating, an IPv6 regex bug
+  fixed, and dictionary-word entropy penalised rather than skipped.
+
 ## v0.1.0 — 2026-09-18
 
 First release. A cross-platform Python secret/credential/endpoint scanner that

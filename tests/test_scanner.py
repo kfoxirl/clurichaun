@@ -1769,3 +1769,41 @@ def test_skip_dependency_caches_by_path() -> None:
     assert not sf.skip_dir("src", "/home/u/myproject/src")
     # --all-dirs disables all pruning.
     assert not ScopeFilter(follow_deny_dirs=True).skip_dir("mod", "/home/u/go/pkg/mod")
+
+
+# --------------------------------------------------------------------------- #
+# Results are persisted by default (history DB + auto-saved JSON report)
+# --------------------------------------------------------------------------- #
+
+
+def test_scan_persists_by_default(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+    from clurichaun.cli import main
+
+    home = tmp_path / "state"
+    target = tmp_path / "proj"
+    target.mkdir()
+    (target / "a.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+    monkeypatch.setenv("CLURICHAUN_HOME", str(home))
+
+    result = CliRunner().invoke(main, ["scan", str(target), "-q"])
+    assert (home / "history.db").is_file(), "history DB created by default"
+    reports = list((home / "reports").glob("*.json"))
+    assert reports, "a JSON report auto-saved by default"
+    doc = json.loads(reports[0].read_text())
+    assert doc["summary"]["findings"] >= 1
+
+
+def test_scan_no_save_flags(tmp_path: Path, monkeypatch) -> None:
+    from click.testing import CliRunner
+    from clurichaun.cli import main
+
+    home = tmp_path / "state"
+    target = tmp_path / "proj"
+    target.mkdir()
+    (target / "a.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+    monkeypatch.setenv("CLURICHAUN_HOME", str(home))
+
+    CliRunner().invoke(main, ["scan", str(target), "-q", "--no-db", "--no-report"])
+    assert not (home / "history.db").exists()
+    assert not (home / "reports").exists()

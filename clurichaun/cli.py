@@ -172,8 +172,10 @@ def main(ctx: click.Context) -> None:
     is_flag=True,
     help="With --verify, exit non-zero only when a finding is confirmed ACTIVE.",
 )
-@click.option("--db", "db_path", type=click.Path(dir_okay=False), help="SQLite datastore for finding history, content dedup and verification cache.")
-@click.option("--incremental", is_flag=True, help="With --db, skip files unchanged since the last scan.")
+@click.option("--db", "db_path", type=click.Path(dir_okay=False), help="SQLite datastore for finding history (default: ~/.clurichaun/history.db).")
+@click.option("--no-db", is_flag=True, help="Do not record findings to the history datastore.")
+@click.option("--no-report", is_flag=True, help="Do not auto-save a JSON report (results are saved by default).")
+@click.option("--incremental", is_flag=True, help="With the datastore, skip files unchanged since the last scan.")
 @click.option("--token-efficiency", is_flag=True, help="Rescore fuzzy findings by BPE token efficiency (needs the [ml] extra).")
 @click.option("--only-actionable", is_flag=True, help="Report only findings worth acting on now (verified-active, checksum-valid, or high-confidence).")
 @click.option("--new-only", is_flag=True, help="With --db, report only findings not seen in a prior scan.")
@@ -219,6 +221,8 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
     verify_only: Optional[str],
     fail_on_verified: bool,
     db_path: Optional[str],
+    no_db: bool,
+    no_report: bool,
     incremental: bool,
     token_efficiency: bool,
     only_actionable: bool,
@@ -234,6 +238,11 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
             baseline_fingerprints = report.load_baseline(baseline)
         except (OSError, ValueError) as exc:
             raise click.ClickException(f"baseline unreadable: {exc}") from exc
+
+    # Results are persisted by default so a long scan is never lost to the
+    # terminal scrollback: a history datastore plus an auto-saved JSON report.
+    if not db_path and not no_db:
+        db_path = str(_default_db_path())
 
     config = ScanConfig(
         roots=list(targets),
@@ -307,6 +316,10 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
         report.render_table(
             findings, engine.stats, config.roots, unredact, max_rows=max_rows
         )
+        # Terminal view shown; also auto-save a JSON snapshot so the results
+        # survive the scrollback (unless the user opted out).
+        if not no_report:
+            _autosave_report(findings, engine.stats, config.roots, unredact, quiet)
     else:
         fmt = "json" if output_format == "table" else output_format
         text = report.render(fmt, findings, engine.stats, config.roots, unredact)
@@ -320,6 +333,9 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
                 click.echo(f"wrote {len(findings)} finding(s) to {output}", err=True)
         else:
             click.echo(text)
+
+    if db_path and not quiet:
+        click.echo(f"history: {db_path}", err=True)
 
     if fail_on_verified:
         from .models import Verified
@@ -383,6 +399,50 @@ def _run_verification(findings, verify_only, quiet, db_path=None) -> None:  # ty
         raise click.ClickException(
             f"--verify needs the web extra: pip install 'clurichaun[web]' ({exc})"
         ) from exc
+
+
+def _clurichaun_home():  # type: ignore[no-untyped-def]
+    """The ~/.clurichaun state directory (override with CLURICHAUN_HOME)."""
+    import os
+    from pathlib import Path
+
+    base = os.environ.get("CLURICHAUN_HOME")
+    home = Path(base) if base else Path.home() / ".clurichaun"
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
+def _default_db_path():  # type: ignore[no-untyped-def]
+    return _clurichaun_home() / "history.db"
+
+
+def _autosave_report(findings, stats, roots, unredact, quiet):  # type: ignore[no-untyped-def]
+    """Write a timestamped JSON snapshot of the scan under ~/.clurichaun/reports."""
+    from datetime import datetime, timezone
+
+    reports = _clurichaun_home() / "reports"
+    try:
+        reports.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        label = _safe_label(roots[0] if roots else "scan")
+        path = reports / f"{stamp}_{label}.json"
+        path.write_text(
+            report.render("json", findings, stats, roots, unredact) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        if not quiet:
+            click.echo(f"could not auto-save report: {exc}", err=True)
+        return
+    if not quiet:
+        click.echo(f"report: {path}", err=True)
+
+
+def _safe_label(root: str) -> str:
+    import re
+
+    name = root.rstrip("/\\").replace("\\", "/").split("/")[-1] or "root"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name)[:48]
 
 
 def _emit(findings, stats, roots, output_format, output, unredact, quiet, max_rows=200):  # type: ignore[no-untyped-def]

@@ -11,7 +11,7 @@ Requires **Python ≥ 3.11**. The core has three small pure-Python dependencies
 
 ```bash
 # From GitHub (latest release)
-pip install "git+https://github.com/kfoxirl/clurichaun.git@v0.1.0"
+pip install "git+https://github.com/kfoxirl/clurichaun.git@v0.2.0"
 
 # ...or the current main
 pip install "git+https://github.com/kfoxirl/clurichaun.git"
@@ -59,7 +59,7 @@ pip install ".[web,cloud,ml]"  # combine extras
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/kfoxirl/clurichaun
-    rev: v0.1.0
+    rev: v0.2.0
     hooks:
       - id: clurichaun
 ```
@@ -110,6 +110,26 @@ amount of link-walking would reach.
 
 Whatever policy the site declares is printed to stderr before the first
 finding, contact address included.
+
+### Results are saved automatically
+
+Every `scan` keeps its results, so a long run is never lost to the terminal:
+
+- a **JSON snapshot** per scan at `~/.clurichaun/reports/<timestamp>_<target>.json`
+- a cumulative **history datastore** at `~/.clurichaun/history.db`
+
+The human table still prints; the snapshot and history are written alongside it.
+Override or disable:
+
+```bash
+clurichaun scan . -o report.json        # your own report path/format instead
+clurichaun scan . --no-report           # do not auto-save a JSON snapshot
+clurichaun scan . --no-db               # do not record to the history datastore
+clurichaun scan . --db ./project.db     # a different datastore location
+clurichaun scan . --db ./project.db --incremental --new-only   # only what changed
+```
+
+Set `CLURICHAUN_HOME` to relocate the whole state directory.
 
 Secrets are **redacted by default** (`AKIA...RTVW`) in every format, including
 match context — `--unredact` opts out. `--fail-on <severity>` gives CI a gate;
