@@ -262,5 +262,19 @@ paths relative to the scan root.
 ## Tests
 
 ```bash
-python -m pytest -q     # 66 tests: detection, decoding, ingestion, parsers, packs, scope, engine, web, output
+python -m pytest -q     # 118 tests: detection, decoding, ingestion, parsers, packs, scope, engine, web, sources, verify, output
 ```
+
+## About the name
+
+A **clúrachán** (anglicised *clurichaun*) is a creature of Irish folklore — a
+small, solitary fairy, often said to be a leprechaun's night-time cousin. Where
+the leprechaun mends shoes, the clurichaun keeps to the **cellar**: he is the
+self-appointed guardian of the household's hidden hoard, and he knows exactly
+what is stashed behind every cask and in every dark corner. Cross him and he
+turns the wine sour; keep on his good side and nothing goes missing without his
+say-so.
+
+It seemed a fitting patron for a tool that rummages through the cellars of a
+codebase — the archives, the binaries, the forgotten `.env` in git history — and
+tells you precisely which secrets are hidden where.
