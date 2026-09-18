@@ -373,6 +373,11 @@ class ScannerEngine:
         if self._on_result is not None and result.findings:
             self._on_result(result)
 
+    def _stream(self, path: str, findings: List[Finding]) -> None:
+        """Emit findings from a non-file source (git, staged, remote) to the live hook."""
+        if self._on_result is not None and findings:
+            self._on_result(FileResult(path=path, findings=findings))
+
     def _persist(self, findings: List[Finding]) -> None:
         assert self.store is not None
         try:
@@ -443,6 +448,7 @@ class ScannerEngine:
         self,
         items,  # Iterable[tuple[str, bytes]]  (logical_path, content)
         progress: Optional[ProgressHook] = None,
+        on_result: Optional[Callable[[FileResult], None]] = None,
     ) -> List[Finding]:
         """Scan an arbitrary stream of (logical_path, bytes) through the pipeline.
 
@@ -450,6 +456,8 @@ class ScannerEngine:
         SCM comment bodies — so each source is just an iterator of bytes and the
         ingestion, decoding and detection are shared, exactly as for files.
         """
+        if on_result is not None:
+            self._on_result = on_result
         detector = SecretDetector(self.config.detector)
         ingestor = FileIngestor(self.config.limits, allow=lambda _p: True)
         out: List[Finding] = []
@@ -461,10 +469,13 @@ class ScannerEngine:
                 continue
             self.stats.files_scanned += 1
             self.stats.bytes_scanned += len(content)
+            here: List[Finding] = []
             for blob in ingestor.blobs_from_bytes(
                 content, logical_path, logical_path, 0, self.stats
             ):
-                out.extend(detector.scan(blob))
+                here.extend(detector.scan(blob))
+            out.extend(here)
+            self._stream(logical_path, here)
             done += 1
             if progress:
                 progress(logical_path, done)
@@ -486,10 +497,13 @@ class ScannerEngine:
                 if not self.config.scope.allow(git_blob.path):
                     self.stats.files_skipped += 1
                     continue
+                here: List[Finding] = []
                 for blob in ingestor.blobs_from_bytes(
                     git_blob.content, git_blob.path, git_blob.path, 0, self.stats
                 ):
-                    out.extend(detector.scan(blob))
+                    here.extend(detector.scan(blob))
+                out.extend(here)
+                self._stream(git_blob.path, here)
                 done += 1
                 if progress:
                     progress(git_blob.path, done)
@@ -520,13 +534,16 @@ class ScannerEngine:
                 if not self.config.scope.allow(git_blob.path):
                     self.stats.files_skipped += 1
                     continue
+                here: List[Finding] = []
                 for blob in ingestor.blobs_from_bytes(
                     git_blob.content, logical, logical, 0, self.stats
                 ):
                     for finding in detector.scan(blob):
                         finding.git = git_blob.context
                         finding.notes.append(_git_note(git_blob.context))
-                        out.append(finding)
+                        here.append(finding)
+                out.extend(here)
+                self._stream(logical, here)
                 done += 1
                 if progress:
                     progress(logical, done)

@@ -1881,3 +1881,42 @@ def test_cli_incremental_default_keeps_report_complete(tmp_path: Path, monkeypat
     latest = json.loads(reports[-1].read_text())
     ids = {f["rule_id"] for f in latest["findings"]}
     assert "aws.access-key-id" in ids, "second incremental run's report stays complete"
+
+
+# --------------------------------------------------------------------------- #
+# Live streaming: every source emits findings via on_result as they arrive
+# --------------------------------------------------------------------------- #
+
+
+def test_git_history_findings_stream(deleted_secret_repo: Path) -> None:
+    streamed: list = []
+    eng = ScannerEngine(
+        ScanConfig(roots=[str(deleted_secret_repo)], workers=1, git_history=True)
+    )
+    findings = eng.run(on_result=lambda r: streamed.extend(r.findings))
+    git = [f for f in findings if f.rule_id == "aws.secret-access-key"]
+    streamed_git = [f for f in streamed if f.rule_id == "aws.secret-access-key"]
+    assert git and len(streamed_git) == len(git)
+
+
+def test_blob_stream_findings_stream() -> None:
+    streamed: list = []
+    eng = ScannerEngine(ScanConfig(roots=["x"], workers=1, scope=scope.ScopeFilter()))
+    items = [("a.env", f"AWS_ACCESS_KEY_ID={AWS_KEY}\n".encode())]
+    findings = eng.scan_blob_stream(items, on_result=lambda r: streamed.extend(r.findings))
+    assert findings and {f.fingerprint for f in streamed} == {f.fingerprint for f in findings}
+
+
+def test_staged_findings_stream(tmp_path: Path) -> None:
+    import subprocess
+
+    def git(*a: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+
+    git("init"); git("config", "user.email", "t@e"); git("config", "user.name", "t")
+    (tmp_path / "s.env").write_text(f"AWS_ACCESS_KEY_ID={AWS_KEY}\n", encoding="utf-8")
+    git("add", "s.env")
+    streamed: list = []
+    eng = ScannerEngine(ScanConfig(roots=[str(tmp_path)], staged=True))
+    findings = eng.run(on_result=lambda r: streamed.extend(r.findings))
+    assert findings and len(streamed) == len(findings)

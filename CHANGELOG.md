@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.1 — 2026-09-18
+
+- **All sources stream live.** The live results table now updates for every
+  finding source as it arrives — git history (`--git-history`), staged content
+  (`--staged`), container images (`scan-image`), object storage (`scan-bucket`),
+  GitHub comments (`scan-github`) and web crawls (`scan-web`) — not just the
+  filesystem scan.
+
 ## v0.3.0 — 2026-09-18
 
 - **Incremental by default, results stay complete.** A repeat scan skips

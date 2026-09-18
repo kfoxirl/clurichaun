@@ -287,14 +287,7 @@ def scan(  # noqa: PLR0913 - a CLI is allowed its surface
     )
 
     engine = ScannerEngine(config)
-    live = (
-        output_format == "table"
-        and not output
-        and not quiet
-        and sys.stdout.isatty()
-        and report.Console is not None
-    )
-    if live:
+    if _live_enabled(output_format, output, quiet):
         findings = _run_live(engine, max_rows)
     else:
         progress = None if quiet else _progress_hook()
@@ -417,8 +410,27 @@ def _run_verification(findings, verify_only, quiet, db_path=None) -> None:  # ty
         ) from exc
 
 
-def _run_live(engine, max_rows):  # type: ignore[no-untyped-def]
-    """Scan with a live-updating rolling table so findings appear as they arrive."""
+def _live_enabled(output_format, output, quiet) -> bool:  # type: ignore[no-untyped-def]
+    return bool(
+        output_format == "table"
+        and not output
+        and not quiet
+        and sys.stdout.isatty()
+        and report.Console is not None
+    )
+
+
+def _run_live(engine, max_rows, runner=None):  # type: ignore[no-untyped-def]
+    """Scan with a live-updating rolling table so findings appear as they arrive.
+
+    ``runner(on_result, progress)`` performs the scan and returns findings; it
+    defaults to a filesystem ``engine.run``, but any source (git history, remote
+    objects, image layers) can pass its own so its findings stream live too.
+    """
+    if runner is None:
+        def runner(on_result, progress):  # type: ignore[no-untyped-def]
+            return engine.run(progress=progress, on_result=on_result)
+
     from collections import Counter, deque
 
     from rich.console import Group
@@ -477,7 +489,7 @@ def _run_live(engine, max_rows):  # type: ignore[no-untyped-def]
         refresh()
 
     with live:
-        findings = engine.run(progress=progress, on_result=on_result)
+        findings = runner(on_result, progress)
         refresh(force=True)
     return findings
 
@@ -728,7 +740,13 @@ def scan_bucket(uri, output_format, output, unredact, rule_packs, fail_on, quiet
     config = ScanConfig(roots=[uri], scope=ScopeFilter(),
                         detector=DetectorConfig(rule_packs=tuple(rule_packs)), workers=1)
     engine = ScannerEngine(config)
-    findings = engine.scan_blob_stream(source.blobs(engine.stats))
+    runner = lambda on_result, progress: engine.scan_blob_stream(
+        source.blobs(engine.stats), progress=progress, on_result=on_result
+    )
+    if _live_enabled(output_format, output, quiet):
+        findings = _run_live(engine, 200, runner)
+    else:
+        findings = runner(None, None)
     findings.sort(key=lambda f: (-f.actionability_rank, -f.severity.rank, -f.confidence))
     _emit(findings, engine.stats, [uri], output_format, output, unredact, quiet)
     sys.exit(report.exit_code(findings, None if fail_on == "never" else Severity(fail_on)))
@@ -762,7 +780,13 @@ def scan_github(target, token, output_format, output, unredact, rule_packs, fail
     config = ScanConfig(roots=[target], scope=ScopeFilter(),
                         detector=DetectorConfig(rule_packs=tuple(rule_packs)), workers=1)
     engine = ScannerEngine(config)
-    findings = engine.scan_blob_stream(source.blobs(engine.stats))
+    runner = lambda on_result, progress: engine.scan_blob_stream(
+        source.blobs(engine.stats), progress=progress, on_result=on_result
+    )
+    if _live_enabled(output_format, output, quiet):
+        findings = _run_live(engine, 200, runner)
+    else:
+        findings = runner(None, None)
     findings.sort(key=lambda f: (-f.actionability_rank, -f.severity.rank, -f.confidence))
     _emit(findings, engine.stats, [target], output_format, output, unredact, quiet)
     sys.exit(report.exit_code(findings, None if fail_on == "never" else Severity(fail_on)))
@@ -824,7 +848,11 @@ def scan_image(
             workers=1,
         )
         eng = ScannerEngine(config)
-        findings = eng.run()
+        runner = lambda on_result, progress: eng.run(progress=progress, on_result=on_result)
+        if _live_enabled(output_format, output, quiet):
+            findings = _run_live(eng, 200, runner)
+        else:
+            findings = runner(None, None)
         # Re-label the temp path back to the image name for the report.
         for finding in findings:
             finding.logical_path = finding.logical_path.replace(tarball, image, 1)
@@ -939,22 +967,33 @@ def scan_web(  # noqa: PLR0913 - a CLI is allowed its surface
         )
     )
     ingestor = FileIngestor()
-    findings: List[Finding] = []
     stats = crawler.stats
 
-    fetched_any = False
-    for fetched in crawler.crawl_and_fetch():
-        if not fetched_any and crawler.ai_policy.declared and not quiet:
-            click.echo(crawler.ai_policy.summary(), err=True)
-        fetched_any = True
-        if not quiet:
-            click.echo(f"scanning {fetched.url}", err=True)
-        for blob in ingestor.blobs_from_bytes(
-            fetched.content, fetched.logical_path, fetched.url, 0, stats
-        ):
-            findings.extend(detector.scan(blob))
+    def crawl_runner(on_result, progress):  # type: ignore[no-untyped-def]
+        from .models import FileResult
 
-    findings = dedupe(findings)
+        collected: List[Finding] = []
+        announced = [False]
+        for index, fetched in enumerate(crawler.crawl_and_fetch(), start=1):
+            if not announced[0] and crawler.ai_policy.declared and not (progress and on_result):
+                click.echo(crawler.ai_policy.summary(), err=True)
+                announced[0] = True
+            here: List[Finding] = []
+            for blob in ingestor.blobs_from_bytes(
+                fetched.content, fetched.logical_path, fetched.url, 0, stats
+            ):
+                here.extend(detector.scan(blob))
+            collected.extend(here)
+            if on_result is not None and here:
+                on_result(FileResult(path=fetched.url, findings=here))
+            if progress is not None:
+                progress(fetched.url, index)
+        return dedupe(collected)
+
+    if _live_enabled(output_format, output, quiet):
+        findings = _run_live(None, 200, crawl_runner)
+    else:
+        findings = crawl_runner(None, None)
     findings.sort(key=lambda f: (-f.severity.rank, -f.confidence, f.logical_path, f.line))
 
     if output_format == "table" and not output:
