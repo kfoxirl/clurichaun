@@ -353,12 +353,48 @@ class ScannerEngine:
             except Exception as exc:  # noqa: BLE001
                 self.stats.errors.append(f"datastore: carry-forward failed: {exc}")
                 carried = []
+            self._rehydrate_secrets(carried)
             self.carried_forward = len(carried)
             findings.extend(carried)
 
         if self.store is not None:
             self._persist(findings)
         return findings
+
+    def _rehydrate_secrets(self, carried: List[Finding]) -> None:
+        """Recover the raw secret for carried-forward findings, in place.
+
+        The datastore only ever persists redacted values (never raw secrets to
+        disk), so a finding loaded via ``Finding.from_stored`` has its secret
+        already masked. The file it came from is unchanged (that's why it was
+        carried forward), so re-detecting against it reproduces the exact same
+        finding with the real value, at the cost of one re-read per affected
+        file rather than the whole tree.
+        """
+        if not carried:
+            return
+        detector = SecretDetector(self.config.detector)
+        ingestor = FileIngestor(self.config.limits, allow=self.config.scope.allow)
+        by_path: dict[str, List[Finding]] = {}
+        for stale in carried:
+            by_path.setdefault(stale.source_path, []).append(stale)
+        for path, group in by_path.items():
+            stats = ScanStats(files_seen=1)
+            try:
+                fresh = [
+                    f
+                    for blob in ingestor.blobs(path, stats)
+                    for f in detector.scan(blob)
+                ]
+            except Exception:  # noqa: BLE001 - keep the stored (redacted) value
+                continue
+            fresh_by_key = {(f.rule_id, f.logical_path, f.line, f.column): f for f in fresh}
+            for stale in group:
+                match = fresh_by_key.get((stale.rule_id, stale.logical_path, stale.line, stale.column))
+                if match is not None:
+                    stale.secret = match.secret
+                    stale.secret_v2 = match.secret_v2
+                    stale.match_context = match.match_context
 
     def _absorb(self, result, findings: List[Finding]) -> None:  # type: ignore[no-untyped-def]
         """Fold one FileResult into the running totals and record its hash."""
