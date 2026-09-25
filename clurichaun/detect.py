@@ -367,12 +367,20 @@ def _context(text: str, start: int, length: int) -> str:
 
 
 _KEY_NEAR = re.compile(
-    r"(?i)([A-Za-z0-9_.\-\[\]]{2,64})\s*(?:[:=]|=>|:=)\s*[\"']?[^\s\"']*[\"']?$"
+    r"(?i)[\"']?([A-Za-z0-9_.\-\[\]]{2,64})[\"']?\s*(?:[:=]|=>|:=)\s*[\"']?[^\s\"']*[\"']?$"
 )
+_TRAILING_PUNCT = re.compile(r"[,;]\s*$")
 
 
 def _key_near(line_text: str) -> Optional[str]:
-    match = _KEY_NEAR.search(line_text[:512])
+    """The identifier immediately preceding a value at end of line.
+
+    Handles both bare keys (`FOO = ...`) and JSON-quoted ones (`"foo": ...`),
+    and strips a trailing `,`/`;` first so the common one-key-per-line JSON or
+    statement-terminated form doesn't push the value past the `$` anchor.
+    """
+    cleaned = _TRAILING_PUNCT.sub("", line_text[:512])
+    match = _KEY_NEAR.search(cleaned)
     return match.group(1) if match else None
 
 
