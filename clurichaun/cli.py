@@ -69,7 +69,7 @@ def main(ctx: click.Context) -> None:
     help="Output format.",
 )
 @click.option("-o", "--output", type=click.Path(dir_okay=False), help="Write report to a file.")
-@click.option("--unredact", is_flag=True, help="Print full secret values (dangerous).")
+@click.option("--unredact/--redact", default=True, help="Print full secret values (default); --redact masks them.")
 @click.option(
     "--min-confidence",
     type=click.FloatRange(0.0, 1.0),
@@ -722,7 +722,7 @@ def revoke_cmd(report_path: str, confirm: bool, yes: bool) -> None:
 @click.argument("uri")
 @click.option("-f", "--format", "output_format", type=click.Choice(["table", "json", "sarif"]), default="table", show_default=True)
 @click.option("-o", "--output", type=click.Path(dir_okay=False))
-@click.option("--unredact", is_flag=True)
+@click.option("--unredact/--redact", default=True)
 @click.option("--rule-pack", "rule_packs", multiple=True)
 @click.option("--fail-on", type=click.Choice(SEVERITIES + ["never"]), default="never", show_default=True)
 @click.option("-q", "--quiet", is_flag=True)
@@ -757,7 +757,7 @@ def scan_bucket(uri, output_format, output, unredact, rule_packs, fail_on, quiet
 @click.option("--token", envvar="GITHUB_TOKEN", help="GitHub token (or set GITHUB_TOKEN).")
 @click.option("-f", "--format", "output_format", type=click.Choice(["table", "json", "sarif"]), default="table", show_default=True)
 @click.option("-o", "--output", type=click.Path(dir_okay=False))
-@click.option("--unredact", is_flag=True)
+@click.option("--unredact/--redact", default=True)
 @click.option("--rule-pack", "rule_packs", multiple=True)
 @click.option("--fail-on", type=click.Choice(SEVERITIES + ["never"]), default="never", show_default=True)
 @click.option("-q", "--quiet", is_flag=True)
@@ -796,7 +796,7 @@ def scan_github(target, token, output_format, output, unredact, rule_packs, fail
 @click.argument("image")
 @click.option("-f", "--format", "output_format", type=click.Choice(["table", "json", "sarif"]), default="table", show_default=True)
 @click.option("-o", "--output", type=click.Path(dir_okay=False))
-@click.option("--unredact", is_flag=True)
+@click.option("--unredact/--redact", default=True)
 @click.option("--rule-pack", "rule_packs", multiple=True)
 @click.option("--fail-on", type=click.Choice(SEVERITIES + ["never"]), default="never", show_default=True)
 @click.option("--engine", type=click.Choice(["docker", "podman"]), default="docker", show_default=True)
@@ -879,7 +879,7 @@ def scan_image(
     help="Output format.",
 )
 @click.option("-o", "--output", type=click.Path(dir_okay=False), help="Write report to a file.")
-@click.option("--unredact", is_flag=True, help="Print full secret values (dangerous).")
+@click.option("--unredact/--redact", default=True, help="Print full secret values (default); --redact masks them.")
 @click.option("--depth", type=int, default=3, show_default=True, help="Crawl depth.")
 @click.option("--max-files", type=int, default=1000, show_default=True, help="Resource cap.")
 @click.option("--timeout", type=int, default=10, show_default=True, help="HTTP timeout (s).")
