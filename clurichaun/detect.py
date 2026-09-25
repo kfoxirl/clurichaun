@@ -367,7 +367,7 @@ def _context(text: str, start: int, length: int) -> str:
 
 
 _KEY_NEAR = re.compile(
-    r"(?i)([A-Za-z0-9_.\-\[\]]{2,64})\s*(?:[:=]|=>|:=)\s*[\"']?[^\s\"']*$"
+    r"(?i)([A-Za-z0-9_.\-\[\]]{2,64})\s*(?:[:=]|=>|:=)\s*[\"']?[^\s\"']*[\"']?$"
 )
 
 

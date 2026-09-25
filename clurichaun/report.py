@@ -322,6 +322,7 @@ def _rich_table(
     table.add_column("Sev", width=8, no_wrap=True)
     table.add_column("Rule", width=28, no_wrap=True)
     table.add_column("Location", overflow="fold")
+    table.add_column("Key", overflow="fold")
     table.add_column("Secret", overflow="fold")
     table.add_column("Conf", width=5, justify="right")
     if show_verified:
@@ -332,7 +333,8 @@ def _rich_table(
         cells = [
             Text(finding.severity.value.upper(), style=_SEVERITY_STYLE[finding.severity]),
             finding.rule_id,
-            f"{short_path(finding.logical_path, root)}:{finding.line}",
+            f"{short_path(finding.logical_path, root)}:{finding.line}:{finding.column}",
+            finding.key_name or "",
             secret,
             f"{finding.confidence:.2f}",
         ]
@@ -355,7 +357,7 @@ def _plain_table(
     root: Optional[str] = None,
 ) -> None:
     color = stream.isatty()
-    header = f"{'SEVERITY':<9} {'RULE':<28} {'CONF':<5} LOCATION"
+    header = f"{'SEVERITY':<9} {'RULE':<28} {'CONF':<5} {'KEY':<24} LOCATION"
     print(header, file=stream)
     print("-" * len(header), file=stream)
     for finding in rows:
@@ -365,7 +367,8 @@ def _plain_table(
         print(
             f"{prefix}{finding.severity.value.upper():<9}{suffix} "
             f"{finding.rule_id:<28} {finding.confidence:<5.2f} "
-            f"{short_path(finding.logical_path, root)}:{finding.line}  {secret}",
+            f"{(finding.key_name or ''):<24} "
+            f"{short_path(finding.logical_path, root)}:{finding.line}:{finding.column}  {secret}",
             file=stream,
         )
     if len(rows) < len(findings):
