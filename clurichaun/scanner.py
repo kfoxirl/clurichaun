@@ -362,14 +362,14 @@ class ScannerEngine:
         return findings
 
     def _rehydrate_secrets(self, carried: List[Finding]) -> None:
-        """Recover the raw secret for carried-forward findings, in place.
+        """Recover display fields for carried-forward findings, in place.
 
-        The datastore only ever persists redacted values (never raw secrets to
-        disk), so a finding loaded via ``Finding.from_stored`` has its secret
-        already masked. The file it came from is unchanged (that's why it was
-        carried forward), so re-detecting against it reproduces the exact same
-        finding with the real value, at the cost of one re-read per affected
-        file rather than the whole tree.
+        The datastore persists a point-in-time snapshot (redacted secret, and
+        whatever the detector computed for ``key_name`` at the time — stale if
+        the detector's logic has changed since). The file it came from is
+        unchanged (that's why it was carried forward), so re-detecting against
+        it reproduces the exact same finding with current values, at the cost
+        of one re-read per affected file rather than the whole tree.
         """
         if not carried:
             return
@@ -395,6 +395,7 @@ class ScannerEngine:
                     stale.secret = match.secret
                     stale.secret_v2 = match.secret_v2
                     stale.match_context = match.match_context
+                    stale.key_name = match.key_name
 
     def _absorb(self, result, findings: List[Finding]) -> None:  # type: ignore[no-untyped-def]
         """Fold one FileResult into the running totals and record its hash."""
